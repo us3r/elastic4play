@@ -4,10 +4,8 @@ import javax.inject.{ Inject, Named, Singleton }
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{ ExecutionContext, Future, Promise }
-
 import play.api.inject.ApplicationLifecycle
 import play.api.{ Configuration, Logger }
-
 import akka.NotUsed
 import akka.actor.ActorSystem
 import akka.stream.scaladsl.{ Sink, Source }
@@ -30,7 +28,9 @@ import org.elasticsearch.action.admin.indices.create.CreateIndexResponse
 import org.elasticsearch.action.admin.indices.exists.indices.IndicesExistsResponse
 import org.elasticsearch.action.delete.DeleteResponse
 import org.elasticsearch.common.settings.Settings
-
+import com.floragunn.searchguard.ssl.util.SSLConfigConstants
+//import com.floragunn.searchguard.SearchGuardPlugin
+import com.floragunn.searchguard.ssl.SearchGuardSSLPlugin
 import org.elastic4play.Timed
 
 /**
@@ -45,6 +45,10 @@ class DBConfiguration(
     baseIndexName: String,
     xpackUsername: Option[String],
     xpackPassword: Option[String],
+    sgKstore: Option[String],
+    sgTstore: Option[String],
+    sgKpass: Option[String],
+    sgTpass: Option[String],
     lifecycle: ApplicationLifecycle,
     val version: Int,
     implicit val ec: ExecutionContext,
@@ -62,6 +66,10 @@ class DBConfiguration(
       configuration.get[String]("search.index"),
       configuration.getOptional[String]("search.username"),
       configuration.getOptional[String]("search.password"),
+      configuration.getOptional[String]("search.kstore"),
+      configuration.getOptional[String]("search.tstore"),
+      configuration.getOptional[String]("search.kpass"),
+      configuration.getOptional[String]("search.tpass"),
       lifecycle,
       version,
       ec,
@@ -75,6 +83,17 @@ class DBConfiguration(
     val settings = Settings.builder()
     settings.put("cluster.name", searchCluster)
 
+    sgTpass.
+    if (sgTstore.nonEmpty && sgKstore.nonEmpty && sgKpass.nonEmpty && sgTpass.nonEmpty) {
+      settings.put(SSLConfigConstants.SEARCHGUARD_SSL_TRANSPORT_KEYSTORE_FILEPATH, s"${sgKstore}")
+      settings.put(SSLConfigConstants.SEARCHGUARD_SSL_TRANSPORT_TRUSTSTORE_FILEPATH, s"${sgTstore}")
+      settings.put(SSLConfigConstants.SEARCHGUARD_SSL_TRANSPORT_KEYSTORE_PASSWORD, s"${sgKpass}")
+      settings.put(SSLConfigConstants.SEARCHGUARD_SSL_TRANSPORT_TRUSTSTORE_PASSWORD, s"${sgTpass}")
+      settings.put(SSLConfigConstants.SEARCHGUARD_SSL_TRANSPORT_ENFORCE_HOSTNAME_VERIFICATION, false)
+      settings.put(SSLConfigConstants.SEARCHGUARD_SSL_TRANSPORT_ENFORCE_HOSTNAME_VERIFICATION_RESOLVE_HOST_NAME, false)
+      settings.put("path.home", "/")
+    }
+
     val xpackClient = for {
       username ← xpackUsername
       if username.nonEmpty
@@ -83,7 +102,8 @@ class DBConfiguration(
       _ = settings.put("xpack.security.user", s"$username:$password")
     } yield XPackElasticClient(settings.build(), uri)
 
-    xpackClient.getOrElse(TcpClient.transport(settings.build(), uri))
+    TcpClient.transport(settings.build(), uri, classOf[SearchGuardSSLPlugin])
+    //xpackClient.getOrElse(TcpClient.transport(settings.build(), uri))
   }
 
   /**
@@ -152,5 +172,5 @@ class DBConfiguration(
   /**
     * return a new instance of DBConfiguration that points to the previous version of the index schema
     */
-  def previousVersion: DBConfiguration = new DBConfiguration(searchHost, searchCluster, baseIndexName, xpackUsername, xpackPassword, lifecycle, version - 1, ec, actorSystem)
+  def previousVersion: DBConfiguration = new DBConfiguration(searchHost, searchCluster, baseIndexName, xpackUsername, xpackPassword, sgKstore, sgTstore, sgKpass, sgTpass, lifecycle, version - 1, ec, actorSystem)
 }
